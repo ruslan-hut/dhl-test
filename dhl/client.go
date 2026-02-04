@@ -19,6 +19,10 @@ import (
 const (
 	// Endpoint is the DHL24 WebAPI endpoint
 	Endpoint = "https://dhl24.com.pl/webapi2/provider/service.html?ws=1"
+
+	// SOAP namespace constants
+	soapenvNS = "http://schemas.xmlsoap.org/soap/envelope/"
+	dhlNS     = "https://dhl24.com.pl/webapi2/provider/service.html?ws=1"
 )
 
 // Client represents a DHL24 API client
@@ -74,6 +78,23 @@ func (c *Client) writeDebugFile(prefix string, payload []byte) {
 	}
 }
 
+// marshalSOAPRequest creates a SOAP envelope with the given body and marshals it to XML
+func (c *Client) marshalSOAPRequest(body interface{}) ([]byte, error) {
+	envelope := SOAPEnvelope{
+		Soapenv: soapenvNS,
+		NS:      dhlNS,
+		Body:    SOAPBody{Content: body},
+	}
+
+	xmlData, err := xml.MarshalIndent(envelope, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling SOAP request: %w", err)
+	}
+
+	// Add XML declaration
+	return append([]byte(xml.Header), xmlData...), nil
+}
+
 // doRequest performs an HTTP request and optionally logs request/response to files
 func (c *Client) doRequest(ctx context.Context, body []byte, soapAction string, operationName string) ([]byte, *http.Response, error) {
 	if c.debugFiles {
@@ -106,23 +127,40 @@ func (c *Client) doRequest(ctx context.Context, body []byte, soapAction string, 
 	return respBody, resp, nil
 }
 
-// GetVersion retrieves the DHL24 WebAPI version
-// This is the only method that doesn't require authentication
-func (c *Client) GetVersion(ctx context.Context) ([]byte, *http.Response, error) {
-	soapEnvelope := `<?xml version="1.0" encoding="UTF-8"?>
-		<soapenv:Envelope
-			xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-			xmlns:ns="https://dhl24.com.pl/webapi2/provider/service.html?ws=1">
-			<soapenv:Header/>
-			<soapenv:Body>
-				<ns:getVersion/>
-			</soapenv:Body>
-		</soapenv:Envelope>`
-
-	return c.doRequest(ctx, []byte(soapEnvelope), Endpoint+"#getVersion", "getVersion")
+// authData returns AuthData populated from client config
+func (c *Client) authData() AuthData {
+	return AuthData{
+		Username: c.config.Username,
+		Password: c.config.Password,
+	}
 }
 
-// CreateShipment creates a new shipment
+// GetVersion retrieves the DHL24 WebAPI version
+// This is the only method that doesn't require authentication
+func (c *Client) GetVersion(ctx context.Context) (string, *http.Response, error) {
+	reqBody, err := c.marshalSOAPRequest(GetVersionRequest{})
+	if err != nil {
+		return "", nil, err
+	}
+
+	body, resp, err := c.doRequest(ctx, reqBody, Endpoint+"#getVersion", "getVersion")
+	if err != nil {
+		return "", resp, err
+	}
+
+	var envelope SOAPResponseEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return "", resp, fmt.Errorf("error parsing response: %w", err)
+	}
+
+	if envelope.Body.GetVersionResponse == nil {
+		return "", resp, fmt.Errorf("empty getVersion response")
+	}
+
+	return envelope.Body.GetVersionResponse.Version, resp, nil
+}
+
+// CreateShipments creates new shipments
 // Documentation: https://dhl24.com.pl/en/webapi2/doc.html
 // Product codes: https://dhl24.com.pl/en/webapi2/doc/service/createShipment.html
 // Common products: AH (DHL Parcel), PR (Premium), EK (Express 9:00), DR (Express 12:00), etc.
@@ -130,98 +168,67 @@ func (c *Client) GetVersion(ctx context.Context) ([]byte, *http.Response, error)
 //   - Fault 100: Invalid credentials
 //   - Fault 101: Missing required parameter
 //   - Fault 131: Product retrieval error (product not available for account)
-func (c *Client) CreateShipment(ctx context.Context) ([]byte, *http.Response, error) {
-	username := c.config.Username
-	password := c.config.Password
-	accountNumber := c.config.AccountNumber
+func (c *Client) CreateShipments(ctx context.Context, shipments []ShipmentItem) ([]CreatedShipment, *http.Response, error) {
+	request := CreateShipmentsRequest{
+		AuthData: c.authData(),
+		Shipments: Shipments{
+			Items: shipments,
+		},
+	}
 
-	soapEnvelope := `<?xml version="1.0" encoding="UTF-8"?>
-		<soapenv:Envelope
-			xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-			xmlns:ns="https://dhl24.com.pl/webapi2/provider/service.html?ws=1">
-			<soapenv:Header/>
-			<soapenv:Body>
-				<ns:createShipments>
-					<authData>
-						<username>` + username + `</username>
-						<password>` + password + `</password>
-					</authData>
-					<shipments>
-						<item>
-						<shipper>
-							<name>ESMALTE INC</name>
-							<postalCode>01249</postalCode>
-							<city>Warsaw</city>
-							<street>GOLESZOWSKA</street>
-							<houseNumber>3</houseNumber>
-							<contactPhone>123456789</contactPhone>
-							<contactEmail>sender@example.com</contactEmail>
-						</shipper>
-						<receiver>
-							<country>PL</country>
-							<name>NIÑO PERESOZO</name>
-							<postalCode>01249</postalCode>
-							<city>Warsaw</city>
-							<street>GOLESZOWSKA</street>
-							<houseNumber>3</houseNumber>
-							<contactPhone>987654321</contactPhone>
-							<contactEmail>receiver@example.com</contactEmail>
-						</receiver>
-						<pieceList>
-							<item>
-								<type>ENVELOPE</type>
-								<quantity>1</quantity>
-								<weight>0.5</weight>
-							</item>
-						</pieceList>
-						<payment>
-							<paymentType>BANK_TRANSFER</paymentType>
-							<payerType>SHIPPER</payerType>
-							<accountNumber>` + accountNumber + `</accountNumber>
-							<paymentMethod>BANK_TRANSFER</paymentMethod>
-						</payment>
-						<service>
-							<product>AH</product>
-						</service>
-						<shipmentDate>` + time.Now().AddDate(0, 0, 1).Format("2006-01-02") + `</shipmentDate>
-						<skipRestrictionCheck>true</skipRestrictionCheck>
-						<comment></comment>
-               			<content>zawartosc testowa</content>
-						</item>
-					</shipments>
-				</ns:createShipments>
-			</soapenv:Body>
-		</soapenv:Envelope>`
+	reqBody, err := c.marshalSOAPRequest(request)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	return c.doRequest(ctx, []byte(soapEnvelope), Endpoint+"#createShipments", "createShipments")
+	body, resp, err := c.doRequest(ctx, reqBody, Endpoint+"#createShipments", "createShipments")
+	if err != nil {
+		return nil, resp, err
+	}
+
+	var envelope SOAPResponseEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return nil, resp, fmt.Errorf("error parsing response: %w", err)
+	}
+
+	if envelope.Body.CreateShipmentsResponse == nil {
+		return nil, resp, fmt.Errorf("empty createShipments response")
+	}
+
+	return envelope.Body.CreateShipmentsResponse.Result.Items, resp, nil
+}
+
+// CreateShipment creates a single shipment (convenience wrapper)
+func (c *Client) CreateShipment(ctx context.Context, shipment ShipmentItem) (*CreatedShipment, *http.Response, error) {
+	results, resp, err := c.CreateShipments(ctx, []ShipmentItem{shipment})
+	if err != nil {
+		return nil, resp, err
+	}
+
+	if len(results) == 0 {
+		return nil, resp, fmt.Errorf("no shipment created")
+	}
+
+	return &results[0], resp, nil
 }
 
 // GetMyShipments retrieves shipments list for the specified date range
 // Documentation: https://dhl24.com.pl/en/webapi2/doc/info/getMyShipments.html
 // Returns maximum 100 records per request (use offset for pagination)
 func (c *Client) GetMyShipments(ctx context.Context, createdFrom, createdTo string, offset int) ([]ShipmentBasicData, *http.Response, error) {
-	username := c.config.Username
-	password := c.config.Password
+	request := GetMyShipmentsRequest{
+		AuthData:    c.authData(),
+		CreatedFrom: createdFrom,
+		CreatedTo:   createdTo,
+		Offset:      offset,
+	}
 
-	soapEnvelope := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-		<soapenv:Envelope
-			xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-			xmlns:ns="https://dhl24.com.pl/webapi2/provider/service.html?ws=1">
-			<soapenv:Header/>
-			<soapenv:Body>
-				<ns:getMyShipments>
-					<authData>
-						<username>%s</username>
-						<password>%s</password>
-					</authData>
-					<createdFrom>%s</createdFrom>
-					<createdTo>%s</createdTo>
-					<offset>%d</offset>
-				</ns:getMyShipments>
-			</soapenv:Body>
-		</soapenv:Envelope>`, username, password, createdFrom, createdTo, offset)
+	reqBody, err := c.marshalSOAPRequest(request)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	body, resp, err := c.doRequest(ctx, []byte(soapEnvelope), Endpoint+"#getMyShipments", "getMyShipments")
+	body, resp, err := c.doRequest(ctx, reqBody, Endpoint+"#getMyShipments", "getMyShipments")
 	if err != nil {
 		return nil, resp, err
 	}

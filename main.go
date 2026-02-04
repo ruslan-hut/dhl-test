@@ -25,17 +25,17 @@ func main() {
 	client := dhl.NewClient(&config.DHL24)
 
 	// Test getVersion method - check API version (no auth required)
-	// testGetVersion(ctx, client)
+	testGetVersion(ctx, client)
 
 	// Test createShipment method
-	// testCreateShipment(ctx, client)
+	// testCreateShipment(ctx, client, config)
 
 	// Test getMyShipments method - get shipments from last 7 days
 	testGetMyShipments(ctx, client)
 }
 
 func testGetVersion(ctx context.Context, client *dhl.Client) {
-	body, resp, err := client.GetVersion(ctx)
+	version, resp, err := client.GetVersion(ctx)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -43,13 +43,56 @@ func testGetVersion(ctx context.Context, client *dhl.Client) {
 
 	fmt.Println("=== getVersion ===")
 	fmt.Println("HTTP status:", resp.Status)
-	fmt.Println("Response body:")
-	fmt.Println(string(body))
+	fmt.Println("API Version:", version)
 	fmt.Println()
 }
 
-func testCreateShipment(ctx context.Context, client *dhl.Client) {
-	body, resp, err := client.CreateShipment(ctx)
+func testCreateShipment(ctx context.Context, client *dhl.Client, config *dhl.Config) {
+	// Build shipment from structs
+	shipment := dhl.ShipmentItem{
+		Shipper: dhl.Address{
+			Name:         "ESMALTE INC",
+			PostalCode:   "01249",
+			City:         "Warsaw",
+			Street:       "GOLESZOWSKA",
+			HouseNumber:  "3",
+			ContactPhone: "123456789",
+			ContactEmail: "sender@example.com",
+		},
+		Receiver: dhl.Address{
+			Country:      "PL",
+			Name:         "Test Receiver",
+			PostalCode:   "01249",
+			City:         "Warsaw",
+			Street:       "GOLESZOWSKA",
+			HouseNumber:  "3",
+			ContactPhone: "987654321",
+			ContactEmail: "receiver@example.com",
+		},
+		PieceList: dhl.PieceList{
+			Items: []dhl.Piece{
+				{
+					Type:     "ENVELOPE",
+					Quantity: 1,
+					Weight:   0.5,
+				},
+			},
+		},
+		Payment: dhl.Payment{
+			PaymentType:   "BANK_TRANSFER",
+			PayerType:     "SHIPPER",
+			AccountNumber: config.DHL24.AccountNumber,
+			PaymentMethod: "BANK_TRANSFER",
+		},
+		Service: dhl.Service{
+			Product: "AH",
+		},
+		ShipmentDate:         time.Now().AddDate(0, 0, 1).Format("2006-01-02"),
+		SkipRestrictionCheck: true,
+		Content:              "test content",
+	}
+
+	result, resp, err := client.CreateShipment(ctx, shipment)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -57,8 +100,7 @@ func testCreateShipment(ctx context.Context, client *dhl.Client) {
 
 	fmt.Println("=== createShipment ===")
 	fmt.Println("HTTP status:", resp.Status)
-	fmt.Println("Response body:")
-	fmt.Println(string(body))
+	fmt.Printf("Created shipment ID: %s\n", result.ShipmentID)
 }
 
 func testGetMyShipments(ctx context.Context, client *dhl.Client) {
