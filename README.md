@@ -33,10 +33,22 @@ cp config.example.json config.json
   "dhl24": {
     "username": "your_username",
     "password": "your_password",
-    "accountNumber": "your_account_number"
+    "accountNumber": "your_account_number",
+    "debugFiles": false,
+    "debugFilesDir": ""
   }
 }
 ```
+
+### Configuration Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `username` | string | DHL24 API username |
+| `password` | string | DHL24 API password |
+| `accountNumber` | string | DHL24 account number |
+| `debugFiles` | bool | If `true`, saves request/response XML payloads to files |
+| `debugFilesDir` | string | Directory for debug files (empty = executable directory) |
 
 ## Getting DHL24 API Credentials
 
@@ -92,7 +104,11 @@ Common DHL24 product codes:
 
 ```
 dhl-test/
-├── main.go                 # Main application code
+├── main.go                 # Main application entry point
+├── dhl/                    # DHL package
+│   ├── client.go           # API client with methods
+│   ├── config.go           # Configuration types and loader
+│   └── types.go            # Response structs
 ├── config.json             # Local configuration (gitignored)
 ├── config.example.json     # Example configuration
 ├── go.mod                  # Go module file
