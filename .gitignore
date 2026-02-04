@@ -13,6 +13,7 @@ config.json
 
 # Output of the go coverage tool
 *.out
+.debug
 
 # Go workspace file
 go.work

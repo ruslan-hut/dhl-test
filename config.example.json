@@ -2,6 +2,8 @@
   "dhl24": {
     "username": "YOUR_USERNAME_HERE",
     "password": "YOUR_PASSWORD_HERE",
-    "accountNumber": "YOUR_ACCOUNT_NUMBER"
+    "accountNumber": "YOUR_ACCOUNT_NUMBER",
+    "debugFiles": false,
+    "debugFilesDir": ""
   }
 }
